@@ -188,8 +188,9 @@ llm_config = 'gpt3'
 # Sandbox timeout in seconds
 #timeout = 120
 
-# Sandbox type (ssh, e2b, local)
-#box_type = "ssh"
+# Sandbox type (ssh, e2b, local, aws)
+box_type = "aws"
+aws_sandbox_target_id = "codebuild:08318063-88e5-46cd-a23a-ebc873125f10"
 
 # Sandbox user ID
 #user_id = 1000

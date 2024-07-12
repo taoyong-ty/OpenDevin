@@ -60,6 +60,7 @@ class LLMConfig:
     aws_access_key_id: str | None = None
     aws_secret_access_key: str | None = None
     aws_region_name: str | None = None
+    aws_session_token: str | None = None
     num_retries: int = 5
     retry_min_wait: int = 3
     retry_max_wait: int = 60
@@ -132,6 +133,7 @@ class SandboxConfig(metaclass=Singleton):
 
     Attributes:
         box_type: The type of sandbox to use. Options are: ssh, e2b, local.
+        aws_sandbox_target_id: The managed node to connect to for the session.
         container_image: The container image to use for the sandbox.
         user_id: The user ID for the sandbox.
         timeout: The timeout for the sandbox.
@@ -146,6 +148,7 @@ class SandboxConfig(metaclass=Singleton):
     )
     user_id: int = os.getuid() if hasattr(os, 'getuid') else 1000
     timeout: int = 120
+    aws_sandbox_target_id: str = ''
 
     def defaults_to_dict(self) -> dict:
         """
@@ -227,6 +230,7 @@ class AppConfig(metaclass=Singleton):
     max_iterations: int = 100
     max_budget_per_task: float | None = None
     e2b_api_key: str = ''
+    aws_session_id: str = ''
     use_host_network: bool = False
     ssh_hostname: str = 'localhost'
     disable_color: bool = False
