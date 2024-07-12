@@ -23,6 +23,7 @@ from opendevin.events.observation import (
 )
 from opendevin.events.serialization.action import ACTION_TYPE_TO_CLASS
 from opendevin.runtime import (
+    AWSBox,
     DockerSSHBox,
     E2BBox,
     LocalBox,
@@ -41,6 +42,8 @@ def create_sandbox(sid: str = 'default', box_type: str = 'ssh') -> Sandbox:
         return DockerSSHBox(sid=sid)
     elif box_type == 'e2b':
         return E2BBox()
+    elif box_type == 'aws':
+        return AWSBox()
     else:
         raise ValueError(f'Invalid sandbox type: {box_type}')
 

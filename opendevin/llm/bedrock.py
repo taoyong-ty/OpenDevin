@@ -8,14 +8,17 @@ from opendevin.core.logger import opendevin_logger as logger
 AWS_ACCESS_KEY_ID = config.llm.aws_access_key_id
 AWS_SECRET_ACCESS_KEY = config.llm.aws_secret_access_key
 AWS_REGION_NAME = config.llm.aws_region_name
+AWS_SESSION_TOKEN = config.llm.aws_session_token
 
 # It needs to be set as an environment variable, if the variable is configured in the Config file.
-if AWS_ACCESS_KEY_ID is not None:
-    os.environ['AWS_ACCESS_KEY_ID'] = AWS_ACCESS_KEY_ID
-if AWS_SECRET_ACCESS_KEY is not None:
-    os.environ['AWS_SECRET_ACCESS_KEY'] = AWS_SECRET_ACCESS_KEY
-if AWS_REGION_NAME is not None:
-    os.environ['AWS_REGION_NAME'] = AWS_REGION_NAME
+if AWS_ACCESS_KEY_ID is None:
+    AWS_ACCESS_KEY_ID = os.environ['AWS_ACCESS_KEY_ID']
+if AWS_SECRET_ACCESS_KEY is None:
+    AWS_SECRET_ACCESS_KEY = os.environ['AWS_SECRET_ACCESS_KEY']
+if AWS_REGION_NAME is None:
+    AWS_REGION_NAME = os.environ['AWS_REGION_NAME']
+if AWS_SESSION_TOKEN is None:
+    AWS_SESSION_TOKEN = os.environ['AWS_SESSION_TOKEN']
 
 
 def list_foundation_models():
@@ -33,6 +36,7 @@ def list_foundation_models():
             region_name=AWS_REGION_NAME,
             aws_access_key_id=AWS_ACCESS_KEY_ID,
             aws_secret_access_key=AWS_SECRET_ACCESS_KEY,
+            aws_session_token=AWS_SESSION_TOKEN,
         )
         foundation_models_list = client.list_foundation_models(
             byOutputModality='TEXT', byInferenceType='ON_DEMAND'

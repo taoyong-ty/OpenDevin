@@ -3,7 +3,6 @@ import re
 import uuid
 import warnings
 
-import requests
 from pathspec import PathSpec
 from pathspec.patterns import GitWildMatchPattern
 
@@ -11,7 +10,6 @@ from opendevin.server.data_models.feedback import FeedbackDataModel, store_feedb
 
 with warnings.catch_warnings():
     warnings.simplefilter('ignore')
-    import litellm
 
 from fastapi import (
     FastAPI,
@@ -302,25 +300,8 @@ async def get_litellm_models():
     Returns:
         list: A sorted list of unique model names.
     """
-    litellm_model_list = litellm.model_list + list(litellm.model_cost.keys())
-    litellm_model_list_without_bedrock = bedrock.remove_error_modelId(
-        litellm_model_list
-    )
-    bedrock_model_list = bedrock.list_foundation_models()
-    model_list = litellm_model_list_without_bedrock + bedrock_model_list
-    ollama_base_url = config.llm.ollama_base_url
-    if config.llm.model.startswith('ollama'):
-        if not ollama_base_url:
-            ollama_base_url = config.llm.base_url
-    if ollama_base_url:
-        ollama_url = ollama_base_url.strip('/') + '/api/tags'
-        try:
-            ollama_models_list = requests.get(ollama_url, timeout=3).json()['models']
-            for model in ollama_models_list:
-                model_list.append('ollama/' + model['name'])
-        except requests.exceptions.RequestException as e:
-            logger.error(f'Error getting OLLAMA models: {e}', exc_info=True)
 
+    model_list = bedrock.list_foundation_models()
     return list(sorted(set(model_list)))
 
 
