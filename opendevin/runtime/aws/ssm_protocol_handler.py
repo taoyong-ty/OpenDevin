@@ -144,14 +144,11 @@ class SSMProtocolHandler:
 
     # Send a message
     def send(self, msg):
-        logger.info('send: %s', msg)
+        logger.debug('send: %s', msg)
         return self.socket.send(msg)
 
     # Setup session with width / height
     def send_init(self, client_width, client_height):
-        logger.info(
-            'sending init with width=%s and height=%s', client_width, client_height
-        )
         return self.send(self._generate_init_message(client_width, client_height))
 
     # Send ACK message over ws

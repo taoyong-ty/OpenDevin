@@ -57,6 +57,7 @@ class AWSBox(Sandbox):
 
         session_target_id = config.sandbox.aws_sandbox_target_id
         self.command_queue: asyncio.Queue = asyncio.Queue()
+        self.result_queue: asyncio.Queue = asyncio.Queue()
 
         self.ssm_client = boto3.client(
             service_name='ssm',
@@ -69,7 +70,9 @@ class AWSBox(Sandbox):
         self.session = self.ssm_client.start_session(Target=session_target_id)
         logger.info(f'connected to {session_target_id}')
 
-        asyncio.ensure_future(main_session_handler(self.session, self.command_queue))
+        asyncio.ensure_future(
+            main_session_handler(self.session, self.command_queue, self.result_queue)
+        )
 
         super().__init__()
 
@@ -77,11 +80,67 @@ class AWSBox(Sandbox):
         self, cmd: str, stream: bool = False, timeout: int | None = None
     ) -> tuple[int, str | CancellableStream]:
         logger.info(f'Executing command {cmd}')
-        self.command_queue.put_nowait(cmd)
-        logger.info(f'command queue size {self.command_queue.qsize()}')
-        result = ''
-        # logger.info(f'Received result {result}')
+        future = asyncio.run_coroutine_threadsafe(
+            self._execute_cmd(cmd), asyncio.get_event_loop()
+        )
+        try:
+            result = future.result(timeout=5)
+        except asyncio.TimeoutError:
+            logger.error(f"Command '{cmd}' timed out after {timeout} seconds.")
+            result = ''
+        logger.info(f'Received result {result}')
         return 0, result
+
+    async def _execute_cmd(self, cmd) -> str:
+        """
+        Execute a command on the remote shell and return the output.
+
+        Args:
+            cmd (str): The command to be executed.
+
+        Returns:
+            str: The output of the executed command.
+
+        Notes:
+            - The command is sent to the remote shell via the command_queue.
+            - The output is retrieved from the result_queue.
+            - A shell prompt (e.g., "sh-5.2#") is used to delimit the command output.
+            - The method assumes that the command output is always preceded by the command itself.
+            - The method assumes that the output buffer is flushed after the shell prompt is encountered.
+
+        Example:
+            For the command 'ls /', the expected state of the result_queue at the end of command execution is:
+                sh-5.2# ls /
+                bin  boot  codebuild  codebuild_docker_build  dev  etc
+                sh-5.2#
+        """
+        self.command_queue.put_nowait(cmd)
+
+        # TODO - a more reliable way to delimit command outputs
+        shell_prompt = 'sh-5.2#'
+        output_buffer = []
+
+        # Ignore everything up to the input command
+        while True:
+            logger.info('getting from queue')
+            output = await self.result_queue.get()
+            logger.info(f'get queue result {output}')
+            if cmd in output:
+                output_buffer.append(output.split(cmd)[-1])
+                break
+
+        while True:
+            logger.info('getting from queue')
+            output = await self.result_queue.get()
+            logger.info(f'get queue result {output}')
+            if output.endswith(shell_prompt):
+                # Collect the command output until the shell prompt is encountered
+                output_buffer.append(output.removesuffix(shell_prompt))
+                break
+            else:
+                output_buffer.append(output)
+
+        return ''.join(output_buffer)
 
     def close(self):
         logger.info('terminating session...')
@@ -94,7 +153,7 @@ class AWSBox(Sandbox):
         pass
 
 
-async def main_session_handler(session, cmd_queue):
+async def main_session_handler(session, cmd_queue, result_queue):
     uri = session['StreamUrl']
     logger.debug('wss: connecting to %s' % uri)
     async with websockets.connect(uri=uri, ping_interval=None) as websocket:
@@ -105,20 +164,23 @@ async def main_session_handler(session, cmd_queue):
         async def consumer_handler(socket, ssm):
             logger.info('consumer started.')
             async for message in socket:
-                logger.info('consumer entered loop.')
                 msg = ssm.deserialize_message(message)
 
-                logger.info(
+                logger.debug(
                     'received: %s' % msg['payload'].decode().replace('\n', '\r\n')
                 )
-                logger.info(msg['payload_type'])
                 if msg['message_type'] in ['output_stream_data']:
                     await ssm.send_ack(msg)
                 if msg['payload_type'] == 1:
-                    # sys.stdout.write(msg['payload'].decode().replace('\n', '\r\n'))
-                    # sys.stdout.flush()
                     logger.info(
                         'got text payload: %s'
+                        % msg['payload'].decode().replace('\n', '\r\n')
+                    )
+                    await result_queue.put(
+                        msg['payload'].decode().replace('\n', '\r\n')
+                    )
+                    logger.info(
+                        ' result_queue put in queue: %s'
                         % msg['payload'].decode().replace('\n', '\r\n')
                     )
                 elif msg['payload_type'] == 17:
@@ -134,14 +196,12 @@ async def main_session_handler(session, cmd_queue):
             except Exception:
                 logger.info('received error')
 
-            logger.info('producer entering loop.')
             while True:
-                logger.info('producer entered loop.')
-                await asyncio.sleep(0.05)
+                await asyncio.sleep(0.02)
                 try:
                     cmd = await cmd_queue.get()
                     logger.info('received command %s' % cmd)
-                    await ssm.send_text(cmd + '\n\r')  # need newline to trigger command
+                    await ssm.send_text(cmd + '\n')  # need newline to trigger command
                 except Exception:
                     await ssm.send_text('\x04')
                     logger.info('received error')
