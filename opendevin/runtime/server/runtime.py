@@ -19,6 +19,7 @@ from opendevin.events.observation import (
 )
 from opendevin.events.stream import EventStream
 from opendevin.runtime import (
+    AWSBox,
     DockerSSHBox,
     E2BBox,
     LocalBox,
@@ -41,6 +42,8 @@ def create_sandbox(sid: str = 'default', box_type: str = 'ssh') -> Sandbox:
         return DockerSSHBox(sid=sid)
     elif box_type == 'e2b':
         return E2BBox()
+    elif box_type == 'aws':
+        return AWSBox()
     else:
         raise ValueError(f'Invalid sandbox type: {box_type}')
 
@@ -93,15 +96,17 @@ class ServerRuntime(Runtime):
                 )
 
     async def run(self, action: CmdRunAction) -> Observation:
-        return self._run_command(action.command)
+        return await self._run_command(action.command)
 
     async def run_ipython(self, action: IPythonRunCellAction) -> Observation:
-        obs = self._run_command(
+        obs = await self._run_command(
             ("cat > /tmp/opendevin_jupyter_temp.py <<'EOL'\n" f'{action.code}\n' 'EOL'),
         )
 
         # run the code
-        obs = self._run_command('cat /tmp/opendevin_jupyter_temp.py | execute_cli')
+        obs = await self._run_command(
+            'cat /tmp/opendevin_jupyter_temp.py | execute_cli'
+        )
         output = obs.content
         if 'pip install' in action.code:
             print(output)
@@ -114,14 +119,14 @@ class ServerRuntime(Runtime):
                     'Note: you may need to restart the kernel to use updated packages.'
                     in output
                 ):
-                    self._run_command(
+                    await self._run_command(
                         (
                             "cat > /tmp/opendevin_jupyter_temp.py <<'EOL'\n"
                             f'{restart_kernel}\n'
                             'EOL'
                         )
                     )
-                    obs = self._run_command(
+                    obs = await self._run_command(
                         'cat /tmp/opendevin_jupyter_temp.py | execute_cli'
                     )
                     output = '[Package installed successfully]'
@@ -137,14 +142,14 @@ class ServerRuntime(Runtime):
 
                     # re-init the kernel after restart
                     if action.kernel_init_code:
-                        obs = self._run_command(
+                        obs = await self._run_command(
                             (
                                 f"cat > /tmp/opendevin_jupyter_init.py <<'EOL'\n"
                                 f'{action.kernel_init_code}\n'
                                 'EOL'
                             ),
                         )
-                        obs = self._run_command(
+                        obs = await self._run_command(
                             'cat /tmp/opendevin_jupyter_init.py | execute_cli',
                         )
             elif (
@@ -172,9 +177,34 @@ class ServerRuntime(Runtime):
     async def browse_interactive(self, action: BrowseInteractiveAction) -> Observation:
         return await browse(action, self.browser)
 
-    def _run_command(self, command: str) -> Observation:
+    async def _run_command(self, command: str) -> Observation:
+        if hasattr(self.sandbox, 'async_execute'):
+            return await self._async_run_command(command)
+        return self.sync_run_command(command)
+
+    def sync_run_command(self, command: str) -> Observation:
         try:
             exit_code, output = self.sandbox.execute(command)
+            if 'pip install' in command:
+                package_names = command.split(' ', 2)[-1]
+                is_single_package = ' ' not in package_names
+                print(output)
+                if 'Successfully installed' in output:
+                    output = '[Package installed successfully]'
+                elif (
+                    is_single_package
+                    and f'Requirement already satisfied: {package_names}' in output
+                ):
+                    output = '[Package already installed]'
+            return CmdOutputObservation(
+                command_id=-1, content=str(output), command=command, exit_code=exit_code
+            )
+        except UnicodeDecodeError:
+            return ErrorObservation('Command output could not be decoded as utf-8')
+
+    async def _async_run_command(self, command: str) -> Observation:
+        try:
+            exit_code, output = await self.sandbox.async_execute(command)
             if 'pip install' in command:
                 package_names = command.split(' ', 2)[-1]
                 is_single_package = ' ' not in package_names

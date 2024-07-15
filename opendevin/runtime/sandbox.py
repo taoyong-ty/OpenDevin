@@ -42,3 +42,8 @@ class Sandbox(ABC, PluginMixin):
     @abstractmethod
     def get_working_directory(self):
         pass
+
+    async def async_execute(
+        self, cmd: str, stream: bool = False, timeout: int | None = None
+    ) -> tuple[int, str | CancellableStream]:
+        return 0, ''

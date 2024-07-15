@@ -1,5 +1,6 @@
 import asyncio
 import os
+import re
 
 import boto3
 import websockets
@@ -10,10 +11,10 @@ from opendevin.core.schema import CancellableStream
 from opendevin.runtime.aws.ssm_protocol_handler import SSMProtocolHandler
 from opendevin.runtime.sandbox import Sandbox
 
-AWS_ACCESS_KEY_ID = config.llm.aws_access_key_id
-AWS_SECRET_ACCESS_KEY = config.llm.aws_secret_access_key
-AWS_REGION_NAME = config.llm.aws_region_name
-AWS_SESSION_TOKEN = config.llm.aws_session_token
+AWS_ACCESS_KEY_ID = config.get_llm_config().aws_access_key_id
+AWS_SECRET_ACCESS_KEY = config.get_llm_config().aws_secret_access_key
+AWS_REGION_NAME = config.get_llm_config().aws_region_name
+AWS_SESSION_TOKEN = config.get_llm_config().aws_session_token
 
 # It needs to be set as an environment variable, if the variable is configured in the Config file.
 if AWS_ACCESS_KEY_ID is None:
@@ -80,16 +81,28 @@ class AWSBox(Sandbox):
         self, cmd: str, stream: bool = False, timeout: int | None = None
     ) -> tuple[int, str | CancellableStream]:
         logger.info(f'Executing command {cmd}')
-        future = asyncio.run_coroutine_threadsafe(
-            self._execute_cmd(cmd), asyncio.get_event_loop()
-        )
-        try:
-            result = future.result(timeout=5)
-        except asyncio.TimeoutError:
-            logger.error(f"Command '{cmd}' timed out after {timeout} seconds.")
-            result = ''
-        logger.info(f'Received result {result}')
-        return 0, result
+        result = ''
+        exit_code = 0
+
+        logger.info(f'Received result {result}. exit code {exit_code}')
+        return 0, ''
+
+    def clean_control_sequences(self, input_string):
+        # Define the regex pattern to match control sequences and the specific sequences
+        control_sequences_pattern = r'[\r\n\x1b\x07]+|(?:\[?\?2004[hl])'
+        # Remove control sequences and specific sequences from the input string
+        cleaned_string = re.sub(control_sequences_pattern, '', input_string)
+        return cleaned_string
+
+    async def async_execute(
+        self, cmd: str, stream: bool = False, timeout: int | None = None
+    ) -> tuple[int, str | CancellableStream]:
+        logger.info(f'Executing command {cmd}')
+        result = await self._execute_cmd(cmd)
+        exit_code: str = await self._execute_cmd('echo $?')
+        exit_code = self.clean_control_sequences(exit_code)
+        logger.info(f'Received result {result}. \n Exit code: {exit_code}')
+        return int(exit_code), result
 
     async def _execute_cmd(self, cmd) -> str:
         """
@@ -114,33 +127,34 @@ class AWSBox(Sandbox):
                 bin  boot  codebuild  codebuild_docker_build  dev  etc
                 sh-5.2#
         """
-        self.command_queue.put_nowait(cmd)
+        await self.command_queue.put(cmd)
 
         # TODO - a more reliable way to delimit command outputs
         shell_prompt = 'sh-5.2#'
+        seen_cmd = False
         output_buffer = []
 
-        # Ignore everything up to the input command
         while True:
-            logger.info('getting from queue')
-            output = await self.result_queue.get()
+            output: str = await self.result_queue.get()
             logger.info(f'get queue result {output}')
+            output_buffer.append(output)
             if cmd in output:
-                output_buffer.append(output.split(cmd)[-1])
+                seen_cmd = True
+            if shell_prompt in output and seen_cmd:
                 break
 
-        while True:
-            logger.info('getting from queue')
-            output = await self.result_queue.get()
-            logger.info(f'get queue result {output}')
-            if output.endswith(shell_prompt):
-                # Collect the command output until the shell prompt is encountered
-                output_buffer.append(output.removesuffix(shell_prompt))
-                break
-            else:
-                output_buffer.append(output)
-
-        return ''.join(output_buffer)
+        result = ''.join(output_buffer)
+        logger.info(f'Raw result {result}')
+        # Ignore everything up to the input command
+        start_idx = result.find(cmd)
+        result = result[start_idx + len(cmd) :]
+        logger.info(f'Result with cmd removed {result}')
+        # Ignore everything after shell prompt
+        end_idx = result.find(shell_prompt)
+        logger.info(f'Result end idx {end_idx}')
+        result = result[0:end_idx]
+        logger.info(f'Final result {result}')
+        return result
 
     def close(self):
         logger.info('terminating session...')
@@ -179,8 +193,8 @@ async def main_session_handler(session, cmd_queue, result_queue):
                     await result_queue.put(
                         msg['payload'].decode().replace('\n', '\r\n')
                     )
-                    logger.info(
-                        ' result_queue put in queue: %s'
+                    logger.debug(
+                        '   result_queue put in queue: %s'
                         % msg['payload'].decode().replace('\n', '\r\n')
                     )
                 elif msg['payload_type'] == 17:
@@ -213,6 +227,10 @@ async def main_session_handler(session, cmd_queue, result_queue):
             [producer_task, consumer_task],
             return_when=asyncio.FIRST_EXCEPTION,
         )
+
+        for task in done:
+            if task.exception():
+                print(f'Error in task {task}: {task.exception()}')
 
         for task in pending:
             task.cancel()

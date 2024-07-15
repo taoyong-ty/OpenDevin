@@ -1,3 +1,4 @@
+from .aws.sandbox import AWSBox
 from .docker.local_box import LocalBox
 from .docker.ssh_box import DockerSSHBox
 from .e2b.sandbox import E2BBox
@@ -23,6 +24,7 @@ def get_runtime_cls(name: str):
 
 
 __all__ = [
+    'AWSBox',
     'DockerSSHBox',
     'E2BBox',
     'LocalBox',
